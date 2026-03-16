@@ -21,9 +21,17 @@
         <button id="spawnBtn">Force Respawn Check</button>
       </section>
       <section class="admin">
-        <label><input id="adminModeToggle" type="checkbox" /> Admin mode (collect within view range)</label>
+        <label><input id="adminModeToggle" type="checkbox" /> Admin mode (collect from any distance)</label>
       </section>
       <section id="details" class="details">Select a concept marker.</section>
+      <section id="collectedModal" class="collected-modal" hidden aria-live="polite" aria-label="Collected concept details">
+        <div class="collected-modal__card" role="dialog" aria-modal="true" aria-labelledby="collectedConceptTitle">
+          <h2 id="collectedConceptTitle">Concept Collected</h2>
+          <p><strong id="collectedConceptName">Unknown Concept</strong></p>
+          <p>Rarity: <span id="collectedConceptRarity">Unknown rarity</span></p>
+          <button id="closeCollectedModalBtn" type="button">Close</button>
+        </div>
+      </section>
     </main>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
