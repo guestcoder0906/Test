@@ -20,9 +20,14 @@ Concept Go! is a fully deployable mobile + desktop web game where globally share
   - rarity (`Common` → `Mythical`) from tag frequency + semantic weight
   - intrinsic spawn modifier
   - global lifetime `4-16` hours
-  - depleted zones refill toward a denser target (`MIN_CONCEPTS_PER_AREA`, default `12`) using repeated `1-3` spawn bursts per check
+  - depleted zones refill toward a denser target (`MIN_CONCEPTS_PER_AREA`, default `20`) using repeated `1-3` spawn bursts per check
   - scheduled world maintenance every `15-20` minutes via Vercel cron + active cell tracking
 - Dynamic two-letter icon rendering with transparent white-removal at **5% tolerance**.
+
+## Admin mode
+- UI includes an **Admin mode** toggle.
+- Admin collect override is allowed only when `ADMIN_MODE_PASSWORD` env var is set exactly to `Pringles1151!`.
+- With admin mode ON, collection is allowed within **view range** (`LARGE_VIEW_METERS`) even outside the `50m` collection circle.
 
 ## Architecture
 ### Frontend
@@ -66,6 +71,8 @@ Copy `.env.example` to `.env.local` for local dev and set same vars in Vercel.
   - Voyage: Dashboard/API docs for embeddings endpoint + key + model name.
   - Hugging Face: Inference endpoint URL + Access Token + selected embedding model.
 - Overpass + Free Dictionary URLs are prefilled public endpoints.
+
+- Density tuning envs: `MIN_CONCEPTS_PER_AREA` (default `20`), `MAX_SPAWN_CYCLES_PER_CHECK` (default `8`).
 
 ## Deploy on Vercel
 1. Import repository into Vercel.

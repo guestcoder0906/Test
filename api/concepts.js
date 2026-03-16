@@ -11,8 +11,8 @@ export default async function handler(req, res) {
     await upsertActiveCell(lat, lon);
     const concepts = await getNearbyConcepts(lat, lon, GAME_CONFIG.largeViewMeters);
 
-    if (concepts.length < 5) {
-      await spawnInArea(lat, lon);
+    if (concepts.length < GAME_CONFIG.minConceptsPerArea) {
+      await spawnInArea(lat, lon, { targetCount: GAME_CONFIG.minConceptsPerArea });
     }
 
     const refreshed = await getNearbyConcepts(lat, lon, GAME_CONFIG.largeViewMeters);

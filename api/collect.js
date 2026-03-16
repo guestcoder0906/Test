@@ -1,9 +1,9 @@
-import { GAME_CONFIG, haversineMeters, json, readJsonBody, sbFetch } from './_lib/game.js';
+import { GAME_CONFIG, haversineMeters, isAdminEnabledByEnv, json, readJsonBody, sbFetch } from './_lib/game.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
   try {
-    const { conceptId, playerLat, playerLon } = await readJsonBody(req);
+    const { conceptId, playerLat, playerLon, adminMode } = await readJsonBody(req);
     if (!conceptId || !Number.isFinite(playerLat) || !Number.isFinite(playerLon)) {
       return json(res, 400, { error: 'conceptId, playerLat, playerLon required' });
     }
@@ -14,8 +14,15 @@ export default async function handler(req, res) {
     if (!concept.discovered_name) return json(res, 400, { error: 'Concept must be discovered before collection' });
 
     const dist = haversineMeters(playerLat, playerLon, concept.lat, concept.lon);
-    if (dist > GAME_CONFIG.collectionMeters) {
-      return json(res, 403, { error: `Player outside ${GAME_CONFIG.collectionMeters}m range`, distance: dist });
+    const inCollectionRange = dist <= GAME_CONFIG.collectionMeters;
+    const inViewRange = dist <= GAME_CONFIG.largeViewMeters;
+    const adminAllowed = Boolean(adminMode) && isAdminEnabledByEnv();
+
+    if (!(inCollectionRange || (adminAllowed && inViewRange))) {
+      return json(res, 403, {
+        error: `Player must be within ${GAME_CONFIG.collectionMeters}m (or admin mode within ${GAME_CONFIG.largeViewMeters}m view range)`,
+        distance: dist,
+      });
     }
 
     await sbFetch('concepts', { method: 'DELETE', query: `id=eq.${conceptId}` });
