@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Concept Go!</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <h1>Concept Go!</h1>
+        <p>Shared global concept world powered by OSM + Supabase.</p>
+      </header>
+      <section id="status" class="status">Locating player…</section>
+      <section id="map" class="map" aria-label="Concept Go! map"></section>
+      <section class="controls">
+        <button id="discoverBtn" disabled>Discover (≤50m)</button>
+        <button id="collectBtn" disabled>Collect (≤50m)</button>
+        <button id="spawnBtn">Force Respawn Check</button>
+      </section>
+      <section id="details" class="details">Select a concept marker.</section>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
