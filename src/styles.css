@@ -22,8 +22,7 @@ body {
 .topbar,
 .status,
 .controls,
-.details,
-.admin {
+.details {
   padding: 0.65rem 1rem;
 }
 
@@ -97,16 +96,4 @@ button:disabled {
     max-width: 900px;
     margin: 0 auto;
   }
-}
-
-
-.admin {
-  background: #10152a;
-  padding: 0.45rem 1rem 0.7rem;
-  font-size: 0.85rem;
-  color: #dbe4ff;
-}
-
-.admin input {
-  vertical-align: middle;
 }
