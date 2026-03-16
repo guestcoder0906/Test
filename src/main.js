@@ -24,17 +24,33 @@ localStorage.setItem('concept-go-player-id', playerId);
 let player = null;
 let selectedConcept = null;
 let config = { largeViewMeters: 1200, collectionMeters: 50 };
-let adminMode = localStorage.getItem('concept-go-admin-mode') === 'true';
+let adminMode = false;
+let adminPassword = '';
 let playerMarker;
 let viewCircle;
 let collectionCircle;
 const markers = new Map();
 
 if (adminModeToggle) {
-  adminModeToggle.checked = adminMode;
+  adminModeToggle.checked = false;
   adminModeToggle.addEventListener('change', () => {
-    adminMode = Boolean(adminModeToggle.checked);
-    localStorage.setItem('concept-go-admin-mode', String(adminMode));
+    if (adminModeToggle.checked) {
+      const enteredPassword = window.prompt('Enter admin password');
+      if (!enteredPassword) {
+        adminModeToggle.checked = false;
+        adminMode = false;
+        adminPassword = '';
+        detailsEl.textContent = 'Admin mode stays off (password required).';
+      } else {
+        adminMode = true;
+        adminPassword = enteredPassword;
+        detailsEl.textContent = 'Admin mode enabled for this session.';
+      }
+    } else {
+      adminMode = false;
+      adminPassword = '';
+      detailsEl.textContent = 'Admin mode disabled.';
+    }
     updateActionState();
   });
 }
@@ -195,6 +211,7 @@ collectBtn.addEventListener('click', async () => {
       playerLat: player.lat,
       playerLon: player.lon,
       adminMode,
+      adminPassword,
     });
     selectedConcept = null;
     detailsEl.textContent = 'Collected globally.';

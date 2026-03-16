@@ -43,8 +43,9 @@ export async function readJsonBody(req) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return {}; }
 }
 
-export function isAdminEnabledByEnv() {
-  return String(process.env.ADMIN_MODE_PASSWORD || '') === 'Pringles1151!';
+export function isAdminPasswordValid(password) {
+  const expectedPassword = String(process.env.PASSWORD || '');
+  return Boolean(expectedPassword) && String(password || '') === expectedPassword;
 }
 
 export function postgrestUrl(base, path, query = '') {
