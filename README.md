@@ -20,7 +20,7 @@ Concept Go! is a fully deployable mobile + desktop web game where globally share
   - rarity (`Common` → `Mythical`) from tag frequency + semantic weight
   - intrinsic spawn modifier
   - global lifetime `4-16` hours
-  - depleted zones (`<5 concepts`) respawn `1-3`
+  - depleted zones refill toward a denser target (`MIN_CONCEPTS_PER_AREA`, default `12`) using repeated `1-3` spawn bursts per check
   - scheduled world maintenance every `15-20` minutes via Vercel cron + active cell tracking
 - Dynamic two-letter icon rendering with transparent white-removal at **5% tolerance**.
 

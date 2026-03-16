@@ -7,6 +7,8 @@ export const GAME_CONFIG = {
   respawnMaxMinutes: Number(process.env.RESPAWN_MAX_INTERVAL_MINUTES || 20),
   lifetimeMinHours: Number(process.env.CONCEPT_LIFETIME_MIN_HOURS || 4),
   lifetimeMaxHours: Number(process.env.CONCEPT_LIFETIME_MAX_HOURS || 16),
+  minConceptsPerArea: Number(process.env.MIN_CONCEPTS_PER_AREA || 12),
+  maxSpawnCyclesPerCheck: Number(process.env.MAX_SPAWN_CYCLES_PER_CHECK || 5),
 };
 
 export function json(res, code, body) {
