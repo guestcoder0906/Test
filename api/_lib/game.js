@@ -7,7 +7,7 @@ export const GAME_CONFIG = {
   respawnMaxMinutes: Number(process.env.RESPAWN_MAX_INTERVAL_MINUTES || 20),
   lifetimeMinHours: Number(process.env.CONCEPT_LIFETIME_MIN_HOURS || 4),
   lifetimeMaxHours: Number(process.env.CONCEPT_LIFETIME_MAX_HOURS || 16),
-  minConceptsPerArea: Number(process.env.MIN_CONCEPTS_PER_AREA || 20),
+  minConceptsPerArea: Number(process.env.MIN_CONCEPTS_PER_AREA || 36),
   maxSpawnCyclesPerCheck: Number(process.env.MAX_SPAWN_CYCLES_PER_CHECK || 8),
 };
 
@@ -309,11 +309,11 @@ export async function spawnInArea(lat, lon, opts = {}) {
 
   while (current.length + spawned < targetCount && cycles < GAME_CONFIG.maxSpawnCyclesPerCheck) {
     cycles += 1;
-    const spawnCount = randomInt(1, 3);
+    const spawnCount = randomInt(2, 4);
 
     for (let i = 0; i < spawnCount && current.length + spawned < targetCount; i++) {
       const angle = randomBetween(0, Math.PI * 2);
-      const distance = randomBetween(120, GAME_CONFIG.largeViewMeters);
+      const distance = randomBetween(50, GAME_CONFIG.largeViewMeters);
       const nLat = lat + (Math.cos(angle) * distance) / 111320;
       const nLon = lon + (Math.sin(angle) * distance) / (111320 * Math.cos((lat * Math.PI) / 180));
 

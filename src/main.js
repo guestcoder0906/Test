@@ -30,6 +30,9 @@ let playerMarker;
 let viewCircle;
 let collectionCircle;
 const markers = new Map();
+let latestLoadToken = 0;
+
+const LOAD_CHUNK_STEP_METERS = 350;
 
 if (adminModeToggle) {
   adminModeToggle.checked = false;
@@ -106,8 +109,12 @@ function updateActionState() {
   const distance = distanceToSelected();
   const inCollectionRange = distance <= config.collectionMeters;
   const inViewRange = distance <= config.largeViewMeters;
-  discoverBtn.disabled = !selectedConcept || !inCollectionRange || Boolean(selectedConcept.discovered_name);
-  const canCollect = selectedConcept && Boolean(selectedConcept.discovered_name) && (inCollectionRange || (adminMode && inViewRange));
+  const hasSelected = Boolean(selectedConcept);
+  const isDiscovered = Boolean(selectedConcept?.discovered_name);
+
+  discoverBtn.disabled = !hasSelected || !inCollectionRange || isDiscovered;
+
+  const canCollect = hasSelected && isDiscovered && (inCollectionRange || (adminMode && inViewRange));
   collectBtn.disabled = !canCollect;
 }
 
@@ -131,19 +138,7 @@ function syncPlayerMarker() {
   }
 }
 
-async function loadConcepts() {
-  if (!player) return;
-  const q = new URLSearchParams({ lat: String(player.lat), lon: String(player.lon) });
-  const response = await fetch(`/api/concepts?${q}`);
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || 'Failed to load concepts');
-
-  config = payload.config;
-  statusEl.textContent = `Player ${player.lat.toFixed(5)}, ${player.lon.toFixed(5)} | View ${config.largeViewMeters}m | Collect ${config.collectionMeters}m`;
-
-  const concepts = payload.concepts || [];
-  const incomingIds = new Set(concepts.map((c) => c.id));
-
+function reconcileMarkers(concepts, incomingIds) {
   for (const [id, marker] of markers.entries()) {
     if (!incomingIds.has(id)) {
       marker.remove();
@@ -167,13 +162,60 @@ async function loadConcepts() {
     });
     markers.set(concept.id, marker);
   }
+}
 
-  if (selectedConcept) {
-    selectedConcept = concepts.find((c) => c.id === selectedConcept.id) || null;
-    if (selectedConcept) renderDetails(selectedConcept);
+async function fetchConceptChunk(radiusMeters, shouldSpawn) {
+  const q = new URLSearchParams({
+    lat: String(player.lat),
+    lon: String(player.lon),
+    meters: String(radiusMeters),
+    spawn: shouldSpawn ? 'true' : 'false',
+  });
+  const response = await fetch(`/api/concepts?${q}`);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || 'Failed to load concepts');
+  return payload;
+}
+
+async function loadConcepts() {
+  if (!player) return;
+  const loadToken = ++latestLoadToken;
+
+  const radii = [];
+  for (let meters = LOAD_CHUNK_STEP_METERS; meters < config.largeViewMeters; meters += LOAD_CHUNK_STEP_METERS) {
+    radii.push(meters);
   }
-  syncPlayerMarker();
-  updateActionState();
+  radii.push(config.largeViewMeters);
+
+  const conceptsById = new Map();
+
+  for (let i = 0; i < radii.length; i++) {
+    const isFirstChunk = i === 0;
+    const radiusMeters = radii[i];
+    const payload = await fetchConceptChunk(radiusMeters, isFirstChunk);
+
+    if (loadToken !== latestLoadToken) return;
+
+    config = payload.config;
+
+    for (const concept of payload.concepts || []) {
+      conceptsById.set(concept.id, concept);
+    }
+
+    const concepts = [...conceptsById.values()];
+    const incomingIds = new Set(conceptsById.keys());
+    reconcileMarkers(concepts, incomingIds);
+
+    statusEl.textContent = `Player ${player.lat.toFixed(5)}, ${player.lon.toFixed(5)} | View ${config.largeViewMeters}m | Collect ${config.collectionMeters}m | Loaded ${concepts.length} concepts`;
+
+    if (selectedConcept) {
+      selectedConcept = conceptsById.get(selectedConcept.id) || null;
+      if (selectedConcept) renderDetails(selectedConcept);
+    }
+
+    syncPlayerMarker();
+    updateActionState();
+  }
 }
 
 async function postJson(url, body) {
