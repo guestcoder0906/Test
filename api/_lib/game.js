@@ -280,83 +280,77 @@ export async function upsertActiveCell(lat, lon) {
 }
 
 export async function spawnInArea(lat, lon, opts = {}) {
-  const targetCount = Number(opts.targetCount || GAME_CONFIG.minConceptsPerArea);
-  let current = await getNearbyConcepts(lat, lon, GAME_CONFIG.largeViewMeters);
-  if (current.length >= targetCount && !opts.force) return { spawned: 0, existing: current.length, targetCount };
+  const current = await getNearbyConcepts(lat, lon, GAME_CONFIG.largeViewMeters);
+  if (current.length >= 5 && !opts.force) return { spawned: 0, existing: current.length };
 
   const discovered = await sbFetch('concepts', {
     query: 'select=discovered_name&discovered_name=not.is.null&limit=300',
   });
   const knownNames = discovered.map((d) => d.discovered_name).filter(Boolean);
 
+  const spawnCount = randomInt(1, 3);
   let spawned = 0;
-  let cycles = 0;
 
-  while (current.length + spawned < targetCount && cycles < GAME_CONFIG.maxSpawnCyclesPerCheck) {
-    cycles += 1;
-    const spawnCount = randomInt(1, 3);
+  for (let i = 0; i < spawnCount; i++) {
+    const angle = randomBetween(0, Math.PI * 2);
+    const distance = randomBetween(120, GAME_CONFIG.largeViewMeters);
+    const nLat = lat + (Math.cos(angle) * distance) / 111320;
+    const nLon = lon + (Math.sin(angle) * distance) / (111320 * Math.cos((lat * Math.PI) / 180));
 
-    for (let i = 0; i < spawnCount && current.length + spawned < targetCount; i++) {
-      const angle = randomBetween(0, Math.PI * 2);
-      const distance = randomBetween(120, GAME_CONFIG.largeViewMeters);
-      const nLat = lat + (Math.cos(angle) * distance) / 111320;
-      const nLon = lon + (Math.sin(angle) * distance) / (111320 * Math.cos((lat * Math.PI) / 180));
-
-      let context = [];
-      try {
-        context = await getContextFromOverpass(nLat, nLon);
-      } catch {
-        context = [{ name: '', tags: { highway: 'residential' }, lat: nLat, lon: nLon }];
-      }
-
-      const tokens = buildTokenPool(context);
-      const validated = [];
-      for (const t of tokens.slice(0, 45)) {
-        const ok = await dictionaryValidate(t);
-        if (ok) validated.push(ok);
-        if (validated.length > 24) break;
-      }
-      const fallbackWords = ['sanctuary', 'growth', 'oasis', 'ember', 'echo', 'market', 'forge', 'haven'];
-      const brandNewPool = validated.length ? [...new Set(validated)] : fallbackWords;
-
-      const reuseChance = randomBetween(0.25, 0.33);
-      let selectedWord;
-      let semantic = 0.2;
-      if (knownNames.length && Math.random() < reuseChance) {
-        selectedWord = knownNames[randomInt(0, knownNames.length - 1)].toLowerCase();
-      } else {
-        const contextText = context
-          .flatMap((i) => [i.name, ...Object.entries(i.tags || {}).map(([k, v]) => `${k}:${v}`)])
-          .join(' ');
-        const picked = await bestSemanticWord(contextText, brandNewPool);
-        selectedWord = picked.word;
-        semantic = picked.score;
-      }
-
-      const mainCtx = context[0] || { tags: { highway: 'residential' }, name: null };
-      const rarity = rarityFromTags(mainCtx.tags, semantic);
-      const spawnRateModifier = Number((0.5 + rarity.score * 1.5).toFixed(3));
-
-      await sbFetch('concepts', {
-        method: 'POST',
-        body: {
-          lat: nLat,
-          lon: nLon,
-          state: 'undiscovered',
-          rarity_tier: rarity.tier,
-          semantic_weight: Number(Math.max(0, semantic).toFixed(4)),
-          spawn_rate_modifier: spawnRateModifier,
-          map_context: mainCtx.tags,
-          osm_name: mainCtx.name || null,
-          seed_word: selectedWord,
-          discovered_name: null,
-          icon_text: null,
-          expires_at: expiresAtIso(),
-        },
-      });
-      spawned++;
+    let context = [];
+    try {
+      context = await getContextFromOverpass(nLat, nLon);
+    } catch {
+      context = [{ name: '', tags: { highway: 'residential' }, lat: nLat, lon: nLon }];
     }
+
+    const tokens = buildTokenPool(context);
+    const validated = [];
+    for (const t of tokens.slice(0, 45)) {
+      const ok = await dictionaryValidate(t);
+      if (ok) validated.push(ok);
+      if (validated.length > 24) break;
+    }
+    const fallbackWords = ['sanctuary', 'growth', 'oasis', 'ember', 'echo', 'market', 'forge', 'haven'];
+    const brandNewPool = validated.length ? [...new Set(validated)] : fallbackWords;
+
+    const reuseChance = randomBetween(0.25, 0.33);
+    let selectedWord;
+    let semantic = 0.2;
+    if (knownNames.length && Math.random() < reuseChance) {
+      selectedWord = knownNames[randomInt(0, knownNames.length - 1)].toLowerCase();
+    } else {
+      const contextText = context
+        .flatMap((i) => [i.name, ...Object.entries(i.tags || {}).map(([k, v]) => `${k}:${v}`)])
+        .join(' ');
+      const picked = await bestSemanticWord(contextText, brandNewPool);
+      selectedWord = picked.word;
+      semantic = picked.score;
+    }
+
+    const mainCtx = context[0] || { tags: { highway: 'residential' }, name: null };
+    const rarity = rarityFromTags(mainCtx.tags, semantic);
+    const spawnRateModifier = Number((0.5 + rarity.score * 1.5).toFixed(3));
+
+    await sbFetch('concepts', {
+      method: 'POST',
+      body: {
+        lat: nLat,
+        lon: nLon,
+        state: 'undiscovered',
+        rarity_tier: rarity.tier,
+        semantic_weight: Number(Math.max(0, semantic).toFixed(4)),
+        spawn_rate_modifier: spawnRateModifier,
+        map_context: mainCtx.tags,
+        osm_name: mainCtx.name || null,
+        seed_word: selectedWord,
+        discovered_name: null,
+        icon_text: null,
+        expires_at: expiresAtIso(),
+      },
+    });
+    spawned++;
   }
 
-  return { spawned, existing: current.length, targetCount, cycles };
+  return { spawned, existing: current.length };
 }
