@@ -75,6 +75,11 @@ export async function sbFetch(path, { method = 'GET', query = '', body, headers 
   return response.json();
 }
 
+export function isSupabaseMissingTableError(error, tableName) {
+  const message = String(error?.message || '');
+  return message.includes('PGRST205') && message.includes(`public.${tableName}`);
+}
+
 export function haversineMeters(aLat, aLon, bLat, bLon) {
   const toRad = (d) => (d * Math.PI) / 180;
   const dLat = toRad(bLat - aLat);
@@ -277,11 +282,16 @@ export function expiresAtIso() {
 export async function upsertActiveCell(lat, lon) {
   const key = `${lat.toFixed(2)}:${lon.toFixed(2)}`;
   const now = new Date().toISOString();
-  await sbFetch('active_cells', {
-    method: 'POST',
-    headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
-    body: { cell_key: key, lat, lon, last_seen_at: now, next_respawn_at: now },
-  });
+  try {
+    await sbFetch('active_cells', {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+      body: { cell_key: key, lat, lon, last_seen_at: now, next_respawn_at: now },
+    });
+  } catch (error) {
+    if (isSupabaseMissingTableError(error, 'active_cells')) return;
+    throw error;
+  }
 }
 
 export async function spawnInArea(lat, lon, opts = {}) {
