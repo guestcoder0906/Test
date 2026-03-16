@@ -49,9 +49,19 @@ Copy `.env.example` to `.env.local` for local dev and set same vars in Vercel.
 
 ### Env var notes and how to get missing ones
 - `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, project id/name: already provided.
-- `SUPABASE_SERVICE_ROLE_KEY` (recommended):
-  - Supabase Dashboard → Project Settings → API → `service_role`.
-  - Store only as server env var in Vercel (never expose to browser).
+
+#### How to get the Vite Supabase API key correctly (step-by-step)
+1. Log in to Supabase and open your project (`AudioMap`).
+2. In the left sidebar, open **Project Settings**.
+3. Click **Data API** (or **API**, depending on UI version).
+4. In the **Project URL** section, copy the HTTPS URL and set it as `VITE_SUPABASE_URL`.
+5. In the **Project API keys** section, copy the **Publishable key** (starts with `sb_publishable_...`).
+6. Set that value as `VITE_SUPABASE_PUBLISHABLE_KEY` (client) and `SUPABASE_PUBLISHABLE_KEY` (server runtime alias).
+7. Do **not** use deprecated service-role credentials for this app.
+8. In local dev, place values in `.env.local`.
+9. In Vercel, open **Project → Settings → Environment Variables** and add the same keys to Production/Preview/Development.
+10. Redeploy so all serverless functions pick up the updated env values.
+
 - `VITE_EMBEDDING_API_URL`, `VITE_EMBEDDING_API_KEY`, `VITE_EMBEDDING_MODEL`:
   - Voyage: Dashboard/API docs for embeddings endpoint + key + model name.
   - Hugging Face: Inference endpoint URL + Access Token + selected embedding model.

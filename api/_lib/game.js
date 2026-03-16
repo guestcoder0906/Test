@@ -16,7 +16,7 @@ export function json(res, code, body) {
 
 export function getEnv() {
   const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || 'https://oyxgydfmaocqxictnmou.supabase.co';
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_9l3BSqU-mIdYLEgZB2Pv2Q_UUZXU385';
+  const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_9l3BSqU-mIdYLEgZB2Pv2Q_UUZXU385';
   return {
     supabaseUrl,
     supabaseKey,
