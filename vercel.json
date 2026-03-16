@@ -1,0 +1,9 @@
+{
+  "cleanUrls": true,
+  "crons": [
+    {
+      "path": "/api/maintain-world",
+      "schedule": "*/18 * * * *"
+    }
+  ]
+}
