@@ -15,18 +15,24 @@ export default async function handler(req, res) {
 
     const dist = haversineMeters(playerLat, playerLon, concept.lat, concept.lon);
     const inCollectionRange = dist <= GAME_CONFIG.collectionMeters;
-    const inViewRange = dist <= GAME_CONFIG.largeViewMeters;
     const adminAllowed = Boolean(adminMode) && isAdminPasswordValid(adminPassword);
 
-    if (!(inCollectionRange || (adminAllowed && inViewRange))) {
+    if (!(inCollectionRange || adminAllowed)) {
       return json(res, 403, {
-        error: `Player must be within ${GAME_CONFIG.collectionMeters}m (or admin mode within ${GAME_CONFIG.largeViewMeters}m view range)`,
+        error: `Player must be within ${GAME_CONFIG.collectionMeters}m (or use admin mode)`,
         distance: dist,
       });
     }
 
     await sbFetch('concepts', { method: 'DELETE', query: `id=eq.${conceptId}` });
-    return json(res, 200, { collected: true, conceptId });
+    return json(res, 200, {
+      collected: true,
+      conceptId,
+      concept: {
+        discoveredName: concept.discovered_name,
+        rarityTier: concept.rarity_tier,
+      },
+    });
   } catch (error) {
     return json(res, 500, { error: error.message });
   }

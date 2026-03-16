@@ -13,6 +13,10 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const statusEl = document.getElementById('status');
 const detailsEl = document.getElementById('details');
+const collectedModal = document.getElementById('collectedModal');
+const collectedConceptNameEl = document.getElementById('collectedConceptName');
+const collectedConceptRarityEl = document.getElementById('collectedConceptRarity');
+const closeCollectedModalBtn = document.getElementById('closeCollectedModalBtn');
 const discoverBtn = document.getElementById('discoverBtn');
 const collectBtn = document.getElementById('collectBtn');
 const spawnBtn = document.getElementById('spawnBtn');
@@ -59,26 +63,52 @@ if (adminModeToggle) {
 }
 
 
+function hideCollectedModal() {
+  if (!collectedModal) return;
+  collectedModal.hidden = true;
+}
+
+function showCollectedModal(concept) {
+  if (!collectedModal || !concept) return;
+  collectedConceptNameEl.textContent = concept.discoveredName || 'Unknown Concept';
+  collectedConceptRarityEl.textContent = concept.rarityTier || 'Unknown rarity';
+  collectedModal.hidden = false;
+}
+
+if (closeCollectedModalBtn) {
+  closeCollectedModalBtn.addEventListener('click', hideCollectedModal);
+}
+
+if (collectedModal) {
+  collectedModal.addEventListener('click', (event) => {
+    if (event.target === collectedModal) hideCollectedModal();
+  });
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') hideCollectedModal();
+});
+
 function buildLetterIcon(text) {
   const canvas = document.createElement('canvas');
-  canvas.width = 80;
-  canvas.height = 80;
+  canvas.width = 96;
+  canvas.height = 96;
   const ctx = canvas.getContext('2d');
 
   ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, 80, 80);
+  ctx.fillRect(0, 0, 96, 96);
   ctx.fillStyle = '#3d5afe';
   ctx.beginPath();
-  ctx.arc(40, 40, 30, 0, Math.PI * 2);
+  ctx.arc(48, 48, 36, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = '#fff';
-  ctx.font = 'bold 24px system-ui, sans-serif';
+  ctx.font = 'bold 30px system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text.slice(0, 2).toUpperCase(), 40, 41);
+  ctx.fillText(text.slice(0, 2).toUpperCase(), 48, 49);
 
-  const imageData = ctx.getImageData(0, 0, 80, 80);
+  const imageData = ctx.getImageData(0, 0, 96, 96);
   const threshold = 255 - Math.floor(255 * 0.05);
   for (let i = 0; i < imageData.data.length; i += 4) {
     const r = imageData.data[i];
@@ -90,12 +120,12 @@ function buildLetterIcon(text) {
   }
   ctx.putImageData(imageData, 0, 0);
 
-  return L.icon({ iconUrl: canvas.toDataURL('image/png'), iconSize: [40, 40], iconAnchor: [20, 20] });
+  return L.icon({ iconUrl: canvas.toDataURL('image/png'), iconSize: [56, 56], iconAnchor: [28, 28] });
 }
 
 function conceptIcon(concept) {
   if (!concept.discovered_name) {
-    return L.divIcon({ className: 'question-icon', html: '?' });
+    return L.divIcon({ className: 'question-icon', html: '?', iconSize: [56, 56], iconAnchor: [28, 28] });
   }
   return buildLetterIcon((concept.icon_text || concept.discovered_name).slice(0, 2));
 }
@@ -108,13 +138,12 @@ function distanceToSelected() {
 function updateActionState() {
   const distance = distanceToSelected();
   const inCollectionRange = distance <= config.collectionMeters;
-  const inViewRange = distance <= config.largeViewMeters;
   const hasSelected = Boolean(selectedConcept);
   const isDiscovered = Boolean(selectedConcept?.discovered_name);
 
   discoverBtn.disabled = !hasSelected || !inCollectionRange || isDiscovered;
 
-  const canCollect = hasSelected && isDiscovered && (inCollectionRange || (adminMode && inViewRange));
+  const canCollect = hasSelected && isDiscovered && (inCollectionRange || adminMode);
   collectBtn.disabled = !canCollect;
 }
 
@@ -153,7 +182,7 @@ function reconcileMarkers(concepts, incomingIds) {
       m.setIcon(conceptIcon(concept));
       continue;
     }
-    const marker = L.marker([concept.lat, concept.lon], { icon: conceptIcon(concept) }).addTo(map);
+    const marker = L.marker([concept.lat, concept.lon], { icon: conceptIcon(concept), keyboard: true, riseOnHover: true }).addTo(map);
     marker.concept = concept;
     marker.on('click', () => {
       selectedConcept = marker.concept;
@@ -248,7 +277,7 @@ discoverBtn.addEventListener('click', async () => {
 collectBtn.addEventListener('click', async () => {
   if (!selectedConcept || !player) return;
   try {
-    await postJson('/api/collect', {
+    const payload = await postJson('/api/collect', {
       conceptId: selectedConcept.id,
       playerLat: player.lat,
       playerLon: player.lon,
@@ -257,6 +286,7 @@ collectBtn.addEventListener('click', async () => {
     });
     selectedConcept = null;
     detailsEl.textContent = 'Collected globally.';
+    showCollectedModal(payload.concept);
     await loadConcepts();
   } catch (error) {
     detailsEl.textContent = `Collect failed: ${error.message}`;
