@@ -1,9 +1,9 @@
-import { GAME_CONFIG, haversineMeters, isAdminEnabledByEnv, json, readJsonBody, sbFetch } from './_lib/game.js';
+import { GAME_CONFIG, haversineMeters, isAdminPasswordValid, json, readJsonBody, sbFetch } from './_lib/game.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
   try {
-    const { conceptId, playerLat, playerLon, adminMode } = await readJsonBody(req);
+    const { conceptId, playerLat, playerLon, adminMode, adminPassword } = await readJsonBody(req);
     if (!conceptId || !Number.isFinite(playerLat) || !Number.isFinite(playerLon)) {
       return json(res, 400, { error: 'conceptId, playerLat, playerLon required' });
     }
@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     const dist = haversineMeters(playerLat, playerLon, concept.lat, concept.lon);
     const inCollectionRange = dist <= GAME_CONFIG.collectionMeters;
     const inViewRange = dist <= GAME_CONFIG.largeViewMeters;
-    const adminAllowed = Boolean(adminMode) && isAdminEnabledByEnv();
+    const adminAllowed = Boolean(adminMode) && isAdminPasswordValid(adminPassword);
 
     if (!(inCollectionRange || (adminAllowed && inViewRange))) {
       return json(res, 403, {

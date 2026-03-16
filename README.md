@@ -26,7 +26,7 @@ Concept Go! is a fully deployable mobile + desktop web game where globally share
 
 ## Admin mode
 - UI includes an **Admin mode** toggle.
-- Admin collect override is allowed only when `ADMIN_MODE_PASSWORD` env var is set exactly to `Pringles1151!`.
+- Admin collect override is allowed only when the entered password matches the server-side `PASSWORD` env var.
 - With admin mode ON, collection is allowed within **view range** (`LARGE_VIEW_METERS`) even outside the `50m` collection circle.
 
 ## Architecture
