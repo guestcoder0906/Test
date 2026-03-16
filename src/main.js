@@ -238,8 +238,13 @@ async function loadConcepts() {
     statusEl.textContent = `Player ${player.lat.toFixed(5)}, ${player.lon.toFixed(5)} | View ${config.largeViewMeters}m | Collect ${config.collectionMeters}m | Loaded ${concepts.length} concepts`;
 
     if (selectedConcept) {
-      selectedConcept = conceptsById.get(selectedConcept.id) || null;
-      if (selectedConcept) renderDetails(selectedConcept);
+      const refreshedSelection = conceptsById.get(selectedConcept.id);
+      if (refreshedSelection) {
+        selectedConcept = refreshedSelection;
+        renderDetails(selectedConcept);
+      } else if (i === radii.length - 1) {
+        selectedConcept = null;
+      }
     }
 
     syncPlayerMarker();
