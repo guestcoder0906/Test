@@ -1,7 +1,7 @@
 const EARTH_RADIUS_M = 6371000;
 
 export const GAME_CONFIG = {
-  largeViewMeters: Number(process.env.LARGE_VIEW_METERS || 1200),
+  largeViewMeters: Number(process.env.LARGE_VIEW_METERS || 1000),
   collectionMeters: Number(process.env.COLLECTION_METERS || 50),
   respawnMinMinutes: Number(process.env.RESPAWN_MIN_INTERVAL_MINUTES || 15),
   respawnMaxMinutes: Number(process.env.RESPAWN_MAX_INTERVAL_MINUTES || 20),

@@ -27,7 +27,7 @@ localStorage.setItem('concept-go-player-id', playerId);
 
 let player = null;
 let selectedConcept = null;
-let config = { largeViewMeters: 1200, collectionMeters: 50 };
+let config = { largeViewMeters: 1000, collectionMeters: 50 };
 let adminMode = false;
 let adminPassword = '';
 let playerMarker;
@@ -36,7 +36,8 @@ let collectionCircle;
 const markers = new Map();
 let latestLoadToken = 0;
 
-const LOAD_CHUNK_STEP_METERS = 350;
+const PRIORITY_LOAD_METERS = 250;
+const ADMIN_COLLECTION_METERS = 1000;
 
 if (adminModeToggle) {
   adminModeToggle.checked = false;
@@ -58,6 +59,8 @@ if (adminModeToggle) {
       adminPassword = '';
       detailsEl.textContent = 'Admin mode disabled.';
     }
+    syncPlayerMarker();
+    if (selectedConcept) renderDetails(selectedConcept);
     updateActionState();
   });
 }
@@ -135,21 +138,27 @@ function distanceToSelected() {
   return map.distance([player.lat, player.lon], [selectedConcept.lat, selectedConcept.lon]);
 }
 
+function currentCollectionMeters() {
+  return adminMode ? Math.max(config.collectionMeters, ADMIN_COLLECTION_METERS) : config.collectionMeters;
+}
+
 function updateActionState() {
   const distance = distanceToSelected();
-  const inCollectionRange = distance <= config.collectionMeters;
+  const effectiveCollectionMeters = currentCollectionMeters();
+  const inCollectionRange = distance <= effectiveCollectionMeters;
   const hasSelected = Boolean(selectedConcept);
   const isDiscovered = Boolean(selectedConcept?.discovered_name);
 
   discoverBtn.disabled = !hasSelected || !inCollectionRange || isDiscovered;
 
-  const canCollect = hasSelected && isDiscovered && (inCollectionRange || adminMode);
+  const canCollect = hasSelected && isDiscovered && inCollectionRange;
   collectBtn.disabled = !canCollect;
 }
 
 function renderDetails(concept) {
   const name = concept.discovered_name || 'Unknown Concept';
-  detailsEl.textContent = `${name} • ${concept.rarity_tier} • ${Math.round(distanceToSelected())}m away${adminMode ? ' • ADMIN' : ''}`;
+  const rangeText = adminMode ? ` • Collect ${currentCollectionMeters()}m` : '';
+  detailsEl.textContent = `${name} • ${concept.rarity_tier} • ${Math.round(distanceToSelected())}m away${rangeText}${adminMode ? ' • ADMIN' : ''}`;
 }
 
 function syncPlayerMarker() {
@@ -158,12 +167,12 @@ function syncPlayerMarker() {
   if (!playerMarker) {
     playerMarker = L.circleMarker(latlng, { radius: 8, color: '#2d9cdb', fillColor: '#2d9cdb', fillOpacity: 1 }).addTo(map);
     viewCircle = L.circle(latlng, { radius: config.largeViewMeters, color: '#3d5afe', fillOpacity: 0.05 }).addTo(map);
-    collectionCircle = L.circle(latlng, { radius: config.collectionMeters, color: '#00c853', fillOpacity: 0.1 }).addTo(map);
+    collectionCircle = L.circle(latlng, { radius: currentCollectionMeters(), color: '#00c853', fillOpacity: 0.1 }).addTo(map);
     map.setView(latlng, 16);
   } else {
     playerMarker.setLatLng(latlng);
     viewCircle.setLatLng(latlng).setRadius(config.largeViewMeters);
-    collectionCircle.setLatLng(latlng).setRadius(config.collectionMeters);
+    collectionCircle.setLatLng(latlng).setRadius(currentCollectionMeters());
   }
 }
 
@@ -206,50 +215,55 @@ async function fetchConceptChunk(radiusMeters, shouldSpawn) {
   return payload;
 }
 
+function applyConceptPayload(payload, conceptsById, { clearMissing = false } = {}) {
+  config = payload.config;
+
+  for (const concept of payload.concepts || []) {
+    conceptsById.set(concept.id, concept);
+  }
+
+  const concepts = [...conceptsById.values()].sort((a, b) => {
+    const aDistance = map.distance([player.lat, player.lon], [a.lat, a.lon]);
+    const bDistance = map.distance([player.lat, player.lon], [b.lat, b.lon]);
+    return aDistance - bDistance;
+  });
+  const incomingIds = clearMissing ? new Set(conceptsById.keys()) : new Set([...markers.keys(), ...conceptsById.keys()]);
+  reconcileMarkers(concepts, incomingIds);
+
+  statusEl.textContent = `Player ${player.lat.toFixed(5)}, ${player.lon.toFixed(5)} | View ${config.largeViewMeters}m | Collect ${currentCollectionMeters()}m | Loaded ${concepts.length} concepts`;
+
+  if (selectedConcept) {
+    const refreshedSelection = conceptsById.get(selectedConcept.id);
+    if (refreshedSelection) {
+      selectedConcept = refreshedSelection;
+      renderDetails(selectedConcept);
+    } else if (clearMissing) {
+      selectedConcept = null;
+    }
+  }
+
+  syncPlayerMarker();
+  updateActionState();
+}
+
 async function loadConcepts() {
   if (!player) return;
   const loadToken = ++latestLoadToken;
-
-  const radii = [];
-  for (let meters = LOAD_CHUNK_STEP_METERS; meters < config.largeViewMeters; meters += LOAD_CHUNK_STEP_METERS) {
-    radii.push(meters);
-  }
-  radii.push(config.largeViewMeters);
-
   const conceptsById = new Map();
+  const priorityMeters = Math.min(PRIORITY_LOAD_METERS, config.largeViewMeters);
 
-  for (let i = 0; i < radii.length; i++) {
-    const isFirstChunk = i === 0;
-    const radiusMeters = radii[i];
-    const payload = await fetchConceptChunk(radiusMeters, isFirstChunk);
+  const priorityPayload = await fetchConceptChunk(priorityMeters, true);
+  if (loadToken !== latestLoadToken) return;
+  applyConceptPayload(priorityPayload, conceptsById);
 
-    if (loadToken !== latestLoadToken) return;
-
-    config = payload.config;
-
-    for (const concept of payload.concepts || []) {
-      conceptsById.set(concept.id, concept);
-    }
-
-    const concepts = [...conceptsById.values()];
-    const incomingIds = new Set(conceptsById.keys());
-    reconcileMarkers(concepts, incomingIds);
-
-    statusEl.textContent = `Player ${player.lat.toFixed(5)}, ${player.lon.toFixed(5)} | View ${config.largeViewMeters}m | Collect ${config.collectionMeters}m | Loaded ${concepts.length} concepts`;
-
-    if (selectedConcept) {
-      const refreshedSelection = conceptsById.get(selectedConcept.id);
-      if (refreshedSelection) {
-        selectedConcept = refreshedSelection;
-        renderDetails(selectedConcept);
-      } else if (i === radii.length - 1) {
-        selectedConcept = null;
-      }
-    }
-
-    syncPlayerMarker();
-    updateActionState();
+  if (priorityMeters >= priorityPayload.config.largeViewMeters) {
+    applyConceptPayload(priorityPayload, conceptsById, { clearMissing: true });
+    return;
   }
+
+  const fullPayload = await fetchConceptChunk(priorityPayload.config.largeViewMeters, false);
+  if (loadToken !== latestLoadToken) return;
+  applyConceptPayload(fullPayload, conceptsById, { clearMissing: true });
 }
 
 async function postJson(url, body) {
