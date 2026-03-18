@@ -4,9 +4,12 @@ import {
   buildTokenPool,
   dictionaryValidate,
   bestSemanticWord,
+  buildContextText,
+  getReusableConceptNames,
   haversineMeters,
   isAdminPasswordValid,
   json,
+  pickPrimaryContext,
   readJsonBody,
   sbFetch,
 } from './_lib/game.js';
@@ -38,31 +41,30 @@ export default async function handler(req, res) {
     try {
       context = await getContextFromOverpass(concept.lat, concept.lon);
     } catch {
-      context = [{ name: '', tags: concept.map_context || { highway: 'residential' } }];
+      context = [{ name: '', tags: concept.map_context || { leisure: 'park', place: 'local' }, lat: concept.lat, lon: concept.lon }];
     }
 
     const discovered = await sbFetch('concepts', {
       query: 'select=discovered_name&discovered_name=not.is.null&limit=500',
     });
-    const existingNames = discovered.map((d) => d.discovered_name).filter(Boolean).map((x) => x.toLowerCase());
+    const existingNames = getReusableConceptNames(discovered.map((d) => d.discovered_name).filter(Boolean));
 
-    const tokens = buildTokenPool(context);
+    const mainCtx = pickPrimaryContext(context, concept.lat, concept.lon);
+    const tokens = buildTokenPool([mainCtx, ...context]);
     const validated = [];
     for (const token of tokens.slice(0, 40)) {
       const ok = await dictionaryValidate(token);
       if (ok) validated.push(ok);
       if (validated.length > 22) break;
     }
-    const pool = validated.length ? [...new Set(validated)] : ['sanctuary', 'growth', 'oasis', 'horizon', 'archive', 'ember'];
+    const pool = validated.length ? [...new Set(validated)] : ['play', 'garden', 'gallery', 'grove', 'summit', 'orbit', 'harbor', 'meadow'];
 
-    const reuseChance = 0.25 + Math.random() * 0.08;
+    const reuseChance = 0.08 + Math.random() * 0.08;
     let finalWord;
     if (existingNames.length && Math.random() < reuseChance) {
       finalWord = existingNames[Math.floor(Math.random() * existingNames.length)];
     } else {
-      const contextText = context
-        .flatMap((i) => [i.name, ...Object.entries(i.tags || {}).map(([k, v]) => `${k}:${v}`)])
-        .join(' ');
+      const contextText = buildContextText([mainCtx, ...context]);
       finalWord = (await bestSemanticWord(contextText, pool)).word;
     }
 
