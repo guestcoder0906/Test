@@ -128,6 +128,7 @@ const PRIORITY_CONTEXT_KEYS = [
   'amenity', 'leisure', 'tourism', 'historic', 'natural', 'sport', 'shop', 'public_transport', 'railway', 'landuse', 'building', 'highway',
 ];
 
+
 function tokenizeValue(value) {
   return String(value || '')
     .toLowerCase()
@@ -235,6 +236,87 @@ export async function dictionaryValidate(word) {
   return cleaned;
 }
 
+
+export async function fetchDictionaryEntry(word) {
+  const cleaned = (word || '').toLowerCase().replace(/[^a-z-]/g, '');
+  if (cleaned.length < 4) return null;
+  const { dictionaryBase } = getEnv();
+  const response = await fetch(`${dictionaryBase}/${encodeURIComponent(cleaned)}`);
+  if (!response.ok) return null;
+  const data = await response.json();
+  if (!Array.isArray(data) || !data[0]?.meanings?.length) return null;
+  return { word: cleaned, entries: data };
+}
+
+export function extractDictionaryCandidates(entryResult, originWord) {
+  const candidates = [];
+  const seen = new Set();
+  const addCandidate = (value, weight = 0) => {
+    const normalized = String(value || '').toLowerCase().trim();
+    if (!normalized || seen.has(normalized) || isGenericToken(normalized)) return;
+    if (!/^[a-z-]{4,}$/.test(normalized)) return;
+    seen.add(normalized);
+    candidates.push({ word: normalized, weight });
+  };
+
+  if (originWord) addCandidate(originWord, 5);
+
+  for (const entry of entryResult?.entries || []) {
+    addCandidate(entry.word, 5);
+    for (const meaning of entry.meanings || []) {
+      for (const synonym of meaning.synonyms || []) addCandidate(synonym, 4);
+      for (const definition of meaning.definitions || []) {
+        for (const synonym of definition.synonyms || []) addCandidate(synonym, 4);
+        for (const token of tokenizeValue(definition.definition || '')) addCandidate(token, 2);
+        for (const token of tokenizeValue(definition.example || '')) addCandidate(token, 1);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+export async function buildDictionaryCandidatePool(contextItems, limit = 48) {
+  const contextTokens = buildTokenPool(contextItems);
+  const rankedCandidates = [];
+  const seenWords = new Set();
+
+  for (const token of contextTokens.slice(0, 12)) {
+    const entry = await fetchDictionaryEntry(token);
+    if (!entry) continue;
+    for (const candidate of extractDictionaryCandidates(entry, token)) {
+      if (seenWords.has(candidate.word)) continue;
+      seenWords.add(candidate.word);
+      const exactPenalty = candidate.word === token ? 1.5 : 0;
+      rankedCandidates.push({
+        word: candidate.word,
+        score: candidate.weight - exactPenalty,
+      });
+    }
+  }
+
+  return rankedCandidates
+    .sort((a, b) => b.score - a.score || a.word.localeCompare(b.word))
+    .slice(0, limit)
+    .map((candidate) => candidate.word);
+}
+
+export async function resolveConceptCandidates(contextItems, fallbackName = 'horizon') {
+  const dictionaryCandidates = await buildDictionaryCandidatePool(contextItems, 48);
+  if (dictionaryCandidates.length) return dictionaryCandidates;
+
+  const directTokens = [];
+  for (const token of buildTokenPool(contextItems)) {
+    const valid = await dictionaryValidate(token);
+    if (valid) directTokens.push(valid);
+    if (directTokens.length >= 24) break;
+  }
+
+  return [...new Set(directTokens)].length
+    ? [...new Set(directTokens)]
+    : [fallbackName];
+}
+
 export function buildTokenPool(contextItems) {
   const prioritized = [];
   const fallback = [];
@@ -249,12 +331,18 @@ export function buildTokenPool(contextItems) {
 
   for (const item of contextItems) {
     if (item.name) {
-      for (const word of tokenizeValue(item.name)) addToken(word, prioritized);
+      for (const word of tokenizeValue(item.name)) {
+        addToken(word, prioritized);
+      }
     }
     for (const [key, value] of Object.entries(item.tags || {})) {
       const target = PRIORITY_CONTEXT_KEYS.includes(key) ? prioritized : fallback;
-      for (const word of tokenizeValue(value)) addToken(word, target);
-      if (PRIORITY_CONTEXT_KEYS.includes(key) && !isGenericToken(value)) addToken(value, prioritized);
+      for (const word of tokenizeValue(value)) {
+        addToken(word, target);
+      }
+      if (PRIORITY_CONTEXT_KEYS.includes(key) && !isGenericToken(value)) {
+        addToken(value, prioritized);
+      }
     }
   }
 
@@ -314,32 +402,25 @@ function cosine(a, b) {
 
 export async function bestSemanticWord(contextText, words) {
   if (!words.length) return { word: 'horizon', score: 0.5 };
+  const contextTokens = new Set(tokenizeValue(contextText));
   const emb = await embedTexts([contextText, ...words]);
   if (emb && emb.length === words.length + 1) {
     const c = emb[0];
-    let best = words[0];
-    let bestScore = -1;
-    for (let i = 0; i < words.length; i++) {
-      const score = cosine(c, emb[i + 1]);
-      if (score > bestScore) {
-        bestScore = score;
-        best = words[i];
-      }
-    }
-    return { word: best, score: bestScore };
+    const ranked = words.map((word, index) => {
+      const semanticScore = cosine(c, emb[index + 1]);
+      const exactMatchPenalty = contextTokens.has(word) ? 0.2 : 0;
+      return { word, score: semanticScore - exactMatchPenalty, semanticScore };
+    }).sort((a, b) => b.score - a.score);
+    return ranked[0] ? { word: ranked[0].word, score: ranked[0].semanticScore } : { word: words[0], score: 0.5 };
   }
 
   const c = textVecApprox(contextText);
-  let best = words[0];
-  let bestScore = -1;
-  for (const w of words) {
-    const score = cosine(c, textVecApprox(w));
-    if (score > bestScore) {
-      bestScore = score;
-      best = w;
-    }
-  }
-  return { word: best, score: bestScore };
+  const ranked = words.map((word) => {
+    const semanticScore = cosine(c, textVecApprox(word));
+    const exactMatchPenalty = contextTokens.has(word) ? 0.2 : 0;
+    return { word, score: semanticScore - exactMatchPenalty, semanticScore };
+  }).sort((a, b) => b.score - a.score);
+  return ranked[0] ? { word: ranked[0].word, score: ranked[0].semanticScore } : { word: words[0], score: 0.5 };
 }
 
 export function rarityFromTags(tags = {}, semanticScore = 0.4) {
@@ -452,17 +533,8 @@ export async function spawnInArea(lat, lon, opts = {}) {
         context = [{ name: '', tags: { leisure: 'park', place: 'local' }, lat: nLat, lon: nLon }];
       }
 
-      const tokens = buildTokenPool(context);
-      const validated = [];
-      for (const t of tokens.slice(0, 45)) {
-        const ok = await dictionaryValidate(t);
-        if (ok) validated.push(ok);
-        if (validated.length > 24) break;
-      }
-      const fallbackWords = ['play', 'garden', 'harbor', 'grove', 'summit', 'orbit', 'forge', 'meadow', 'gallery', 'canopy'];
-      const brandNewPool = validated.length ? [...new Set(validated)] : fallbackWords;
-
-      const reuseChance = randomBetween(0.04, 0.1);
+      const brandNewPool = await resolveConceptCandidates(context);
+      const reuseChance = randomBetween(0.25, 0.33);
       let selectedWord;
       let semantic = 0.2;
       const contextText = buildContextText(context);

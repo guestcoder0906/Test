@@ -1,8 +1,6 @@
 import {
   GAME_CONFIG,
   getContextFromOverpass,
-  buildTokenPool,
-  dictionaryValidate,
   bestSemanticWord,
   buildContextText,
   buildNameFrequencyMap,
@@ -13,6 +11,7 @@ import {
   pickLeastRepeatedName,
   pickPrimaryContext,
   readJsonBody,
+  resolveConceptCandidates,
   sbFetch,
 } from './_lib/game.js';
 
@@ -53,23 +52,18 @@ export default async function handler(req, res) {
     const nameFrequencyMap = buildNameFrequencyMap(existingNames);
 
     const mainCtx = pickPrimaryContext(context, concept.lat, concept.lon);
-    const tokens = buildTokenPool([mainCtx, ...context]);
-    const validated = [];
-    for (const token of tokens.slice(0, 40)) {
-      const ok = await dictionaryValidate(token);
-      if (ok) validated.push(ok);
-      if (validated.length > 22) break;
-    }
-    const pool = validated.length ? [...new Set(validated)] : ['play', 'garden', 'gallery', 'grove', 'summit', 'orbit', 'harbor', 'meadow'];
-
-    const reuseChance = 0.04 + Math.random() * 0.06;
+    const candidateWords = await resolveConceptCandidates([mainCtx, ...context], concept.seed_word || 'horizon');
+    const reuseChance = 0.25 + Math.random() * 0.08;
     const contextText = buildContextText([mainCtx, ...context]);
     let finalWord;
     if (existingNames.length && Math.random() < reuseChance) {
       finalWord = pickLeastRepeatedName(existingNames, nameFrequencyMap) || existingNames[0];
     } else {
-      const uniqueCandidate = pickLeastRepeatedName(pool, nameFrequencyMap);
-      finalWord = (await bestSemanticWord(contextText, uniqueCandidate ? [uniqueCandidate, ...pool] : pool)).word;
+      const uniqueCandidate = pickLeastRepeatedName(candidateWords, nameFrequencyMap);
+      finalWord = (await bestSemanticWord(
+        contextText,
+        uniqueCandidate ? [uniqueCandidate, ...candidateWords] : candidateWords,
+      )).word;
     }
 
     const updated = await sbFetch('concepts', {
