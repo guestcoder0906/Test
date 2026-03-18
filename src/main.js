@@ -286,6 +286,7 @@ discoverBtn.addEventListener('click', async () => {
       playerLat: player.lat,
       playerLon: player.lon,
       adminMode,
+      adminPassword,
     });
     await loadConcepts();
   } catch (error) {
