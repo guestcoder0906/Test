@@ -121,7 +121,19 @@ export async function getNearbyConcepts(lat, lon, meters = GAME_CONFIG.largeView
 
 const GENERIC_TOKEN_BLACKLIST = new Set([
   'and', 'area', 'avenue', 'building', 'highway', 'landuse', 'level', 'local', 'main', 'nearby', 'north', 'path',
-  'place', 'public', 'residential', 'road', 'service', 'south', 'street', 'the', 'unknown', 'way', 'west', 'yes',
+  'place', 'public', 'residential', 'road', 'service', 'south', 'street', 'the', 'unknown', 'used', 'way', 'west', 'with', 'yes',
+]);
+
+const ABSTRACT_WORD_PATTERNS = [
+  /ness$/, /tion$/, /sion$/, /ment$/, /ity$/, /ism$/, /ship$/, /tude$/, /ence$/, /ance$/, /ology$/, /ability$/,
+];
+
+const CONCRETE_HINT_WORDS = new Set([
+  'arch', 'arena', 'bank', 'barn', 'beach', 'bench', 'bridge', 'brook', 'camp', 'canal', 'canyon', 'cave', 'chapel', 'church',
+  'cliff', 'coast', 'court', 'creek', 'field', 'forest', 'fountain', 'garden', 'grove', 'harbor', 'hill', 'island', 'lake',
+  'library', 'market', 'meadow', 'monument', 'museum', 'oasis', 'park', 'peak', 'pier', 'plaza', 'pond', 'rail', 'reservoir',
+  'river', 'ruins', 'sanctuary', 'school', 'shore', 'square', 'station', 'temple', 'theatre', 'tower', 'trail', 'tree', 'valley',
+  'water', 'waterfall', 'wood',
 ]);
 
 const PRIORITY_CONTEXT_KEYS = [
@@ -141,6 +153,44 @@ function tokenizeValue(value) {
 export function isGenericToken(value) {
   const normalized = String(value || '').toLowerCase().trim();
   return !normalized || GENERIC_TOKEN_BLACKLIST.has(normalized);
+}
+
+function isAbstractLeaningWord(word) {
+  const normalized = String(word || '').toLowerCase().trim();
+  return ABSTRACT_WORD_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function contextSignalWords(contextItems) {
+  const signals = new Set();
+  for (const item of contextItems) {
+    for (const token of tokenizeValue(item.name || '')) signals.add(token);
+    for (const [key, value] of Object.entries(item.tags || {})) {
+      if (PRIORITY_CONTEXT_KEYS.includes(key)) signals.add(String(value || '').toLowerCase().trim());
+      for (const token of tokenizeValue(value || '')) signals.add(token);
+    }
+  }
+  return signals;
+}
+
+function candidateRelationScore(word, contextSignals) {
+  const normalized = String(word || '').toLowerCase().trim();
+  if (!normalized) return -10;
+  let score = 0;
+  if (contextSignals.has(normalized)) score += 0.8;
+  for (const signal of contextSignals) {
+    if (!signal || signal === normalized) continue;
+    if (signal.includes(normalized) || normalized.includes(signal)) score += 0.35;
+  }
+  if (CONCRETE_HINT_WORDS.has(normalized)) score += 0.45;
+  if (isAbstractLeaningWord(normalized)) score -= 0.6;
+  return score;
+}
+
+function rankCandidateWord(word, weight, contextSignals) {
+  const normalized = String(word || '').toLowerCase().trim();
+  const relation = candidateRelationScore(normalized, contextSignals);
+  const lengthPenalty = normalized.length > 12 ? 0.08 : 0;
+  return weight + relation - lengthPenalty;
 }
 
 function contextSpecificityScore(tags = {}) {
@@ -248,7 +298,7 @@ export async function fetchDictionaryEntry(word) {
   return { word: cleaned, entries: data };
 }
 
-export function extractDictionaryCandidates(entryResult, originWord) {
+export function extractDictionaryCandidates(entryResult, originWord, contextSignals = new Set()) {
   const candidates = [];
   const seen = new Set();
   const addCandidate = (value, weight = 0) => {
@@ -262,13 +312,15 @@ export function extractDictionaryCandidates(entryResult, originWord) {
   if (originWord) addCandidate(originWord, 5);
 
   for (const entry of entryResult?.entries || []) {
-    addCandidate(entry.word, 5);
+    addCandidate(entry.word, 5.5);
     for (const meaning of entry.meanings || []) {
-      for (const synonym of meaning.synonyms || []) addCandidate(synonym, 4);
+      const partOfSpeech = String(meaning.partOfSpeech || '').toLowerCase();
+      const partOfSpeechBoost = partOfSpeech === 'noun' ? 1 : partOfSpeech === 'adjective' ? 0.25 : -0.2;
+      for (const synonym of meaning.synonyms || []) addCandidate(synonym, 4 + partOfSpeechBoost);
       for (const definition of meaning.definitions || []) {
-        for (const synonym of definition.synonyms || []) addCandidate(synonym, 4);
-        for (const token of tokenizeValue(definition.definition || '')) addCandidate(token, 2);
-        for (const token of tokenizeValue(definition.example || '')) addCandidate(token, 1);
+        for (const synonym of definition.synonyms || []) addCandidate(synonym, 4 + partOfSpeechBoost);
+        for (const token of tokenizeValue(definition.definition || '')) addCandidate(token, 1.4 + partOfSpeechBoost);
+        for (const token of tokenizeValue(definition.example || '')) addCandidate(token, 0.6 + partOfSpeechBoost);
       }
     }
   }
@@ -278,19 +330,20 @@ export function extractDictionaryCandidates(entryResult, originWord) {
 
 export async function buildDictionaryCandidatePool(contextItems, limit = 48) {
   const contextTokens = buildTokenPool(contextItems);
+  const contextSignals = contextSignalWords(contextItems);
   const rankedCandidates = [];
   const seenWords = new Set();
 
   for (const token of contextTokens.slice(0, 12)) {
     const entry = await fetchDictionaryEntry(token);
     if (!entry) continue;
-    for (const candidate of extractDictionaryCandidates(entry, token)) {
+    for (const candidate of extractDictionaryCandidates(entry, token, contextSignals)) {
       if (seenWords.has(candidate.word)) continue;
       seenWords.add(candidate.word);
-      const exactPenalty = candidate.word === token ? 1.5 : 0;
+      const exactPenalty = candidate.word === token ? 0.9 : 0;
       rankedCandidates.push({
         word: candidate.word,
-        score: candidate.weight - exactPenalty,
+        score: rankCandidateWord(candidate.word, candidate.weight - exactPenalty, contextSignals),
       });
     }
   }
@@ -408,8 +461,10 @@ export async function bestSemanticWord(contextText, words) {
     const c = emb[0];
     const ranked = words.map((word, index) => {
       const semanticScore = cosine(c, emb[index + 1]);
-      const exactMatchPenalty = contextTokens.has(word) ? 0.2 : 0;
-      return { word, score: semanticScore - exactMatchPenalty, semanticScore };
+      const exactMatchPenalty = contextTokens.has(word) ? 0.16 : 0;
+      const abstractPenalty = isAbstractLeaningWord(word) ? 0.08 : 0;
+      const concreteBoost = CONCRETE_HINT_WORDS.has(word) ? 0.05 : 0;
+      return { word, score: semanticScore - exactMatchPenalty - abstractPenalty + concreteBoost, semanticScore };
     }).sort((a, b) => b.score - a.score);
     return ranked[0] ? { word: ranked[0].word, score: ranked[0].semanticScore } : { word: words[0], score: 0.5 };
   }
@@ -417,56 +472,69 @@ export async function bestSemanticWord(contextText, words) {
   const c = textVecApprox(contextText);
   const ranked = words.map((word) => {
     const semanticScore = cosine(c, textVecApprox(word));
-    const exactMatchPenalty = contextTokens.has(word) ? 0.2 : 0;
-    return { word, score: semanticScore - exactMatchPenalty, semanticScore };
+    const exactMatchPenalty = contextTokens.has(word) ? 0.16 : 0;
+    const abstractPenalty = isAbstractLeaningWord(word) ? 0.08 : 0;
+    const concreteBoost = CONCRETE_HINT_WORDS.has(word) ? 0.05 : 0;
+    return { word, score: semanticScore - exactMatchPenalty - abstractPenalty + concreteBoost, semanticScore };
   }).sort((a, b) => b.score - a.score);
   return ranked[0] ? { word: ranked[0].word, score: ranked[0].semanticScore } : { word: words[0], score: 0.5 };
 }
 
 export function rarityFromTags(tags = {}, semanticScore = 0.4) {
   const rarityWeights = {
-    'highway:residential': 0.1,
-    'highway:footway': 0.16,
-    'building:yes': 0.12,
-    'landuse:residential': 0.14,
-    'landuse:forest': 0.38,
-    'amenity:school': 0.28,
-    'amenity:library': 0.5,
-    'amenity:marketplace': 0.56,
-    'amenity:place_of_worship': 0.66,
-    'amenity:theatre': 0.62,
-    'amenity:clock': 0.44,
-    'leisure:park': 0.3,
-    'leisure:playground': 0.38,
-    'tourism:viewpoint': 0.62,
-    'tourism:museum': 0.74,
-    'historic:monument': 0.68,
-    'historic:ruins': 0.8,
-    'natural:wood': 0.34,
-    'natural:water': 0.44,
-    'natural:peak': 0.78,
-    'natural:glacier': 0.9,
-    'natural:volcano': 0.98,
-    'shop:books': 0.4,
-    'sport:skateboard': 0.48,
-    'sport:climbing': 0.58,
+    'highway:residential': 0.08,
+    'highway:footway': 0.18,
+    'building:yes': 0.1,
+    'landuse:residential': 0.12,
+    'landuse:forest': 0.44,
+    'amenity:school': 0.26,
+    'amenity:library': 0.52,
+    'amenity:marketplace': 0.62,
+    'amenity:place_of_worship': 0.76,
+    'amenity:theatre': 0.66,
+    'amenity:clock': 0.46,
+    'leisure:park': 0.24,
+    'leisure:playground': 0.32,
+    'tourism:viewpoint': 0.7,
+    'tourism:museum': 0.82,
+    'historic:monument': 0.78,
+    'historic:ruins': 0.88,
+    'natural:wood': 0.4,
+    'natural:water': 0.5,
+    'natural:peak': 0.86,
+    'natural:glacier': 0.94,
+    'natural:volcano': 1,
+    'shop:books': 0.42,
+    'sport:skateboard': 0.5,
+    'sport:climbing': 0.64,
   };
   const entries = Object.entries(tags);
-  let tagScore = 0.12;
+  if (!entries.length) {
+    const score = Math.min(0.18 + Math.max(0, semanticScore) * 0.18, 1);
+    return score >= 0.85 ? { tier: 'Legendary', score } : score >= 0.62 ? { tier: 'Rare', score } : score >= 0.34 ? { tier: 'Uncommon', score } : { tier: 'Common', score };
+  }
+
+  const tagScores = [];
   let specificityBonus = 0;
   for (const [k, v] of entries) {
     const normalized = `${k}:${v}`;
-    tagScore += rarityWeights[normalized] ?? (PRIORITY_CONTEXT_KEYS.includes(k) && !isGenericToken(v) ? 0.24 : 0.1);
-    if (!isGenericToken(v)) specificityBonus += PRIORITY_CONTEXT_KEYS.includes(k) ? 0.035 : 0.01;
+    const baseScore = rarityWeights[normalized] ?? (PRIORITY_CONTEXT_KEYS.includes(k) && !isGenericToken(v) ? 0.28 : 0.08);
+    tagScores.push(baseScore);
+    if (!isGenericToken(v)) specificityBonus += PRIORITY_CONTEXT_KEYS.includes(k) ? 0.03 : 0.008;
   }
-  tagScore = Math.min((tagScore / Math.max(entries.length + 0.8, 1)) + specificityBonus, 1);
-  const score = Math.min((tagScore * 0.85) + (Math.max(0, semanticScore) * 0.15), 1);
 
-  if (score > 0.92) return { tier: 'Mythical', score };
-  if (score > 0.8) return { tier: 'Legendary', score };
-  if (score > 0.66) return { tier: 'Epic', score };
-  if (score > 0.5) return { tier: 'Rare', score };
-  if (score > 0.3) return { tier: 'Uncommon', score };
+  tagScores.sort((a, b) => b - a);
+  const strongest = tagScores[0] || 0.12;
+  const secondary = tagScores[1] || strongest * 0.65;
+  const tailAverage = tagScores.length > 2 ? tagScores.slice(2).reduce((sum, value) => sum + value, 0) / (tagScores.length - 2) : secondary;
+  const tagScore = Math.min((strongest * 0.6) + (secondary * 0.25) + (tailAverage * 0.15) + specificityBonus, 1);
+  const score = Math.min((tagScore * 0.82) + (Math.max(0, semanticScore) * 0.18), 1);
+
+  if (score >= 0.9) return { tier: 'Mythical', score };
+  if (score >= 0.78) return { tier: 'Legendary', score };
+  if (score >= 0.62) return { tier: 'Epic', score };
+  if (score >= 0.44) return { tier: 'Rare', score };
+  if (score >= 0.24) return { tier: 'Uncommon', score };
   return { tier: 'Common', score };
 }
 
