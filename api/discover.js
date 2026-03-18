@@ -5,6 +5,7 @@ import {
   dictionaryValidate,
   bestSemanticWord,
   haversineMeters,
+  isAdminPasswordValid,
   json,
   readJsonBody,
   sbFetch,
@@ -13,7 +14,7 @@ import {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
   try {
-    const { conceptId, playerId, playerLat, playerLon } = await readJsonBody(req);
+    const { conceptId, playerId, playerLat, playerLon, adminMode, adminPassword } = await readJsonBody(req);
     if (!conceptId || !playerId || !Number.isFinite(playerLat) || !Number.isFinite(playerLon)) {
       return json(res, 400, { error: 'conceptId, playerId, playerLat, playerLon required' });
     }
@@ -24,8 +25,13 @@ export default async function handler(req, res) {
     if (concept.discovered_name) return json(res, 200, { concept, alreadyDiscovered: true });
 
     const dist = haversineMeters(playerLat, playerLon, concept.lat, concept.lon);
-    if (dist > GAME_CONFIG.collectionMeters) {
-      return json(res, 403, { error: `Player outside ${GAME_CONFIG.collectionMeters}m range`, distance: dist });
+    const adminAllowed = Boolean(adminMode) && isAdminPasswordValid(adminPassword);
+    const collectionMeters = adminAllowed ? Math.max(GAME_CONFIG.collectionMeters, 1000) : GAME_CONFIG.collectionMeters;
+    if (dist > collectionMeters) {
+      return json(res, 403, {
+        error: `Player outside ${collectionMeters}m range${adminAllowed ? ' while admin mode is active' : ''}`,
+        distance: dist,
+      });
     }
 
     let context = [];
