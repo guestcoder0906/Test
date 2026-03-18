@@ -5,10 +5,12 @@ import {
   dictionaryValidate,
   bestSemanticWord,
   buildContextText,
+  buildNameFrequencyMap,
   getReusableConceptNames,
   haversineMeters,
   isAdminPasswordValid,
   json,
+  pickLeastRepeatedName,
   pickPrimaryContext,
   readJsonBody,
   sbFetch,
@@ -48,6 +50,7 @@ export default async function handler(req, res) {
       query: 'select=discovered_name&discovered_name=not.is.null&limit=500',
     });
     const existingNames = getReusableConceptNames(discovered.map((d) => d.discovered_name).filter(Boolean));
+    const nameFrequencyMap = buildNameFrequencyMap(existingNames);
 
     const mainCtx = pickPrimaryContext(context, concept.lat, concept.lon);
     const tokens = buildTokenPool([mainCtx, ...context]);
@@ -59,13 +62,14 @@ export default async function handler(req, res) {
     }
     const pool = validated.length ? [...new Set(validated)] : ['play', 'garden', 'gallery', 'grove', 'summit', 'orbit', 'harbor', 'meadow'];
 
-    const reuseChance = 0.08 + Math.random() * 0.08;
+    const reuseChance = 0.04 + Math.random() * 0.06;
+    const contextText = buildContextText([mainCtx, ...context]);
     let finalWord;
     if (existingNames.length && Math.random() < reuseChance) {
-      finalWord = existingNames[Math.floor(Math.random() * existingNames.length)];
+      finalWord = pickLeastRepeatedName(existingNames, nameFrequencyMap) || existingNames[0];
     } else {
-      const contextText = buildContextText([mainCtx, ...context]);
-      finalWord = (await bestSemanticWord(contextText, pool)).word;
+      const uniqueCandidate = pickLeastRepeatedName(pool, nameFrequencyMap);
+      finalWord = (await bestSemanticWord(contextText, uniqueCandidate ? [uniqueCandidate, ...pool] : pool)).word;
     }
 
     const updated = await sbFetch('concepts', {
