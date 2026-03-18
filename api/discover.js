@@ -4,8 +4,14 @@ import {
   buildTokenPool,
   dictionaryValidate,
   bestSemanticWord,
+  buildContextText,
+  buildNameFrequencyMap,
+  getReusableConceptNames,
   haversineMeters,
+  isAdminPasswordValid,
   json,
+  pickLeastRepeatedName,
+  pickPrimaryContext,
   readJsonBody,
   sbFetch,
 } from './_lib/game.js';
@@ -13,7 +19,7 @@ import {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
   try {
-    const { conceptId, playerId, playerLat, playerLon } = await readJsonBody(req);
+    const { conceptId, playerId, playerLat, playerLon, adminMode, adminPassword } = await readJsonBody(req);
     if (!conceptId || !playerId || !Number.isFinite(playerLat) || !Number.isFinite(playerLon)) {
       return json(res, 400, { error: 'conceptId, playerId, playerLat, playerLon required' });
     }
@@ -24,40 +30,46 @@ export default async function handler(req, res) {
     if (concept.discovered_name) return json(res, 200, { concept, alreadyDiscovered: true });
 
     const dist = haversineMeters(playerLat, playerLon, concept.lat, concept.lon);
-    if (dist > GAME_CONFIG.collectionMeters) {
-      return json(res, 403, { error: `Player outside ${GAME_CONFIG.collectionMeters}m range`, distance: dist });
+    const adminAllowed = Boolean(adminMode) && isAdminPasswordValid(adminPassword);
+    const collectionMeters = adminAllowed ? Math.max(GAME_CONFIG.collectionMeters, 1000) : GAME_CONFIG.collectionMeters;
+    if (dist > collectionMeters) {
+      return json(res, 403, {
+        error: `Player outside ${collectionMeters}m range${adminAllowed ? ' while admin mode is active' : ''}`,
+        distance: dist,
+      });
     }
 
     let context = [];
     try {
       context = await getContextFromOverpass(concept.lat, concept.lon);
     } catch {
-      context = [{ name: '', tags: concept.map_context || { highway: 'residential' } }];
+      context = [{ name: '', tags: concept.map_context || { leisure: 'park', place: 'local' }, lat: concept.lat, lon: concept.lon }];
     }
 
     const discovered = await sbFetch('concepts', {
       query: 'select=discovered_name&discovered_name=not.is.null&limit=500',
     });
-    const existingNames = discovered.map((d) => d.discovered_name).filter(Boolean).map((x) => x.toLowerCase());
+    const existingNames = getReusableConceptNames(discovered.map((d) => d.discovered_name).filter(Boolean));
+    const nameFrequencyMap = buildNameFrequencyMap(existingNames);
 
-    const tokens = buildTokenPool(context);
+    const mainCtx = pickPrimaryContext(context, concept.lat, concept.lon);
+    const tokens = buildTokenPool([mainCtx, ...context]);
     const validated = [];
     for (const token of tokens.slice(0, 40)) {
       const ok = await dictionaryValidate(token);
       if (ok) validated.push(ok);
       if (validated.length > 22) break;
     }
-    const pool = validated.length ? [...new Set(validated)] : ['sanctuary', 'growth', 'oasis', 'horizon', 'archive', 'ember'];
+    const pool = validated.length ? [...new Set(validated)] : ['play', 'garden', 'gallery', 'grove', 'summit', 'orbit', 'harbor', 'meadow'];
 
-    const reuseChance = 0.25 + Math.random() * 0.08;
+    const reuseChance = 0.04 + Math.random() * 0.06;
+    const contextText = buildContextText([mainCtx, ...context]);
     let finalWord;
     if (existingNames.length && Math.random() < reuseChance) {
-      finalWord = existingNames[Math.floor(Math.random() * existingNames.length)];
+      finalWord = pickLeastRepeatedName(existingNames, nameFrequencyMap) || existingNames[0];
     } else {
-      const contextText = context
-        .flatMap((i) => [i.name, ...Object.entries(i.tags || {}).map(([k, v]) => `${k}:${v}`)])
-        .join(' ');
-      finalWord = (await bestSemanticWord(contextText, pool)).word;
+      const uniqueCandidate = pickLeastRepeatedName(pool, nameFrequencyMap);
+      finalWord = (await bestSemanticWord(contextText, uniqueCandidate ? [uniqueCandidate, ...pool] : pool)).word;
     }
 
     const updated = await sbFetch('concepts', {

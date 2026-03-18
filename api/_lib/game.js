@@ -1,7 +1,7 @@
 const EARTH_RADIUS_M = 6371000;
 
 export const GAME_CONFIG = {
-  largeViewMeters: Number(process.env.LARGE_VIEW_METERS || 1200),
+  largeViewMeters: Number(process.env.LARGE_VIEW_METERS || 1000),
   collectionMeters: Number(process.env.COLLECTION_METERS || 50),
   respawnMinMinutes: Number(process.env.RESPAWN_MIN_INTERVAL_MINUTES || 15),
   respawnMaxMinutes: Number(process.env.RESPAWN_MAX_INTERVAL_MINUTES || 20),
@@ -119,9 +119,100 @@ export async function getNearbyConcepts(lat, lon, meters = GAME_CONFIG.largeView
   return sbFetch('concepts', { query });
 }
 
+const GENERIC_TOKEN_BLACKLIST = new Set([
+  'and', 'area', 'avenue', 'building', 'highway', 'landuse', 'level', 'local', 'main', 'nearby', 'north', 'path',
+  'place', 'public', 'residential', 'road', 'service', 'south', 'street', 'the', 'unknown', 'way', 'west', 'yes',
+]);
+
+const PRIORITY_CONTEXT_KEYS = [
+  'amenity', 'leisure', 'tourism', 'historic', 'natural', 'sport', 'shop', 'public_transport', 'railway', 'landuse', 'building', 'highway',
+];
+
+function tokenizeValue(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[:/_-]+/g, ' ')
+    .split(/[^a-z]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+export function isGenericToken(value) {
+  const normalized = String(value || '').toLowerCase().trim();
+  return !normalized || GENERIC_TOKEN_BLACKLIST.has(normalized);
+}
+
+function contextSpecificityScore(tags = {}) {
+  let score = 0;
+  for (const [key, value] of Object.entries(tags)) {
+    const keyWeight = Math.max(PRIORITY_CONTEXT_KEYS.length - PRIORITY_CONTEXT_KEYS.indexOf(key), 1);
+    if (PRIORITY_CONTEXT_KEYS.includes(key) && !isGenericToken(value)) score += 8 + keyWeight;
+    else if (key === 'name' && !isGenericToken(value)) score += 6;
+    else if (!isGenericToken(value)) score += 2;
+  }
+  return score;
+}
+
+export function pickPrimaryContext(contextItems, fallbackLat, fallbackLon) {
+  if (!contextItems.length) {
+    return { name: '', tags: { place: 'local' }, lat: fallbackLat, lon: fallbackLon };
+  }
+
+  return [...contextItems].sort((a, b) => {
+    const aSpecificity = contextSpecificityScore(a.tags || {});
+    const bSpecificity = contextSpecificityScore(b.tags || {});
+    if (aSpecificity !== bSpecificity) return bSpecificity - aSpecificity;
+    const aDistance = haversineMeters(fallbackLat, fallbackLon, a.lat ?? fallbackLat, a.lon ?? fallbackLon);
+    const bDistance = haversineMeters(fallbackLat, fallbackLon, b.lat ?? fallbackLat, b.lon ?? fallbackLon);
+    return aDistance - bDistance;
+  })[0];
+}
+
+export function buildContextText(contextItems) {
+  const parts = [];
+  for (const item of contextItems) {
+    if (item.name && !isGenericToken(item.name)) parts.push(item.name);
+    for (const [key, value] of Object.entries(item.tags || {})) {
+      if (!isGenericToken(value) || PRIORITY_CONTEXT_KEYS.includes(key)) {
+        parts.push(`${key}:${value}`);
+      }
+    }
+  }
+  return parts.join(' ');
+}
+
+export function getReusableConceptNames(names = []) {
+  return names
+    .map((name) => String(name || '').toLowerCase().trim())
+    .filter((name) => name && !isGenericToken(name) && !['residential', 'building', 'highway', 'road', 'street', 'service'].includes(name));
+}
+
+export function buildNameFrequencyMap(names = []) {
+  const frequencies = new Map();
+  for (const name of names) {
+    const normalized = String(name || '').toLowerCase().trim();
+    if (!normalized) continue;
+    frequencies.set(normalized, (frequencies.get(normalized) || 0) + 1);
+  }
+  return frequencies;
+}
+
+export function pickLeastRepeatedName(candidates, frequencyMap, blockedNames = new Set()) {
+  const normalizedBlocked = new Set([...blockedNames].map((name) => String(name || '').toLowerCase().trim()).filter(Boolean));
+  const ranked = [...new Set(candidates.map((name) => String(name || '').toLowerCase().trim()).filter(Boolean))]
+    .filter((name) => !normalizedBlocked.has(name))
+    .sort((a, b) => {
+      const frequencyDiff = (frequencyMap.get(a) || 0) - (frequencyMap.get(b) || 0);
+      if (frequencyDiff !== 0) return frequencyDiff;
+      return a.localeCompare(b);
+    });
+
+  return ranked[0] || null;
+}
+
 export async function getContextFromOverpass(lat, lon) {
   const { overpassUrl } = getEnv();
-  const query = `[out:json][timeout:20];(nwr(around:90,${lat},${lon})[name];nwr(around:120,${lat},${lon})["natural"];nwr(around:120,${lat},${lon})["amenity"];nwr(around:120,${lat},${lon})["historic"];nwr(around:120,${lat},${lon})["landuse"];);out tags center 80;`;
+  const query = `[out:json][timeout:20];(nwr(around:80,${lat},${lon})[name];nwr(around:120,${lat},${lon})["amenity"];nwr(around:120,${lat},${lon})["leisure"];nwr(around:120,${lat},${lon})["tourism"];nwr(around:120,${lat},${lon})["historic"];nwr(around:120,${lat},${lon})["natural"];nwr(around:120,${lat},${lon})["sport"];nwr(around:120,${lat},${lon})["shop"];nwr(around:120,${lat},${lon})["public_transport"];nwr(around:120,${lat},${lon})["railway"];nwr(around:120,${lat},${lon})["landuse"];nwr(around:120,${lat},${lon})["building"];nwr(around:120,${lat},${lon})["highway"];);out tags center 100;`;
   const response = await fetch(overpassUrl, { method: 'POST', body: query });
   if (!response.ok) throw new Error(`Overpass failed ${response.status}`);
   const data = await response.json();
@@ -145,19 +236,29 @@ export async function dictionaryValidate(word) {
 }
 
 export function buildTokenPool(contextItems) {
-  const tokens = new Set();
+  const prioritized = [];
+  const fallback = [];
+  const seen = new Set();
+
+  const addToken = (token, target) => {
+    const normalized = String(token || '').toLowerCase().trim();
+    if (!normalized || seen.has(normalized) || isGenericToken(normalized)) return;
+    seen.add(normalized);
+    target.push(normalized);
+  };
+
   for (const item of contextItems) {
     if (item.name) {
-      item.name.split(/\s+/).forEach((w) => tokens.add(w));
+      for (const word of tokenizeValue(item.name)) addToken(word, prioritized);
     }
-    for (const [k, v] of Object.entries(item.tags || {})) {
-      tokens.add(k);
-      tokens.add(v);
-      tokens.add(`${k}:${v}`);
-      tokens.add(`${k}_${v}`);
+    for (const [key, value] of Object.entries(item.tags || {})) {
+      const target = PRIORITY_CONTEXT_KEYS.includes(key) ? prioritized : fallback;
+      for (const word of tokenizeValue(value)) addToken(word, target);
+      if (PRIORITY_CONTEXT_KEYS.includes(key) && !isGenericToken(value)) addToken(value, prioritized);
     }
   }
-  return [...tokens].filter(Boolean);
+
+  return [...prioritized, ...fallback];
 }
 
 export async function embedTexts(texts) {
@@ -243,26 +344,48 @@ export async function bestSemanticWord(contextText, words) {
 
 export function rarityFromTags(tags = {}, semanticScore = 0.4) {
   const rarityWeights = {
-    'highway:residential': 0.08,
-    'amenity:marketplace': 0.55,
-    'natural:wood': 0.34,
+    'highway:residential': 0.1,
+    'highway:footway': 0.16,
+    'building:yes': 0.12,
+    'landuse:residential': 0.14,
+    'landuse:forest': 0.38,
+    'amenity:school': 0.28,
+    'amenity:library': 0.5,
+    'amenity:marketplace': 0.56,
+    'amenity:place_of_worship': 0.66,
+    'amenity:theatre': 0.62,
+    'amenity:clock': 0.44,
+    'leisure:park': 0.3,
+    'leisure:playground': 0.38,
+    'tourism:viewpoint': 0.62,
+    'tourism:museum': 0.74,
+    'historic:monument': 0.68,
     'historic:ruins': 0.8,
-    'natural:volcano': 1,
-    'amenity:place_of_worship': 0.74,
-    'landuse:forest': 0.45,
-    'historic:monument': 0.65,
-    'natural:glacier': 0.92,
+    'natural:wood': 0.34,
+    'natural:water': 0.44,
+    'natural:peak': 0.78,
+    'natural:glacier': 0.9,
+    'natural:volcano': 0.98,
+    'shop:books': 0.4,
+    'sport:skateboard': 0.48,
+    'sport:climbing': 0.58,
   };
   const entries = Object.entries(tags);
-  let tagScore = 0.15;
-  for (const [k, v] of entries) tagScore += rarityWeights[`${k}:${v}`] ?? 0.12;
-  tagScore = Math.min(tagScore / (entries.length + 0.5), 1);
-  const score = Math.min((tagScore * 0.7) + (Math.max(0, semanticScore) * 0.3), 1);
+  let tagScore = 0.12;
+  let specificityBonus = 0;
+  for (const [k, v] of entries) {
+    const normalized = `${k}:${v}`;
+    tagScore += rarityWeights[normalized] ?? (PRIORITY_CONTEXT_KEYS.includes(k) && !isGenericToken(v) ? 0.24 : 0.1);
+    if (!isGenericToken(v)) specificityBonus += PRIORITY_CONTEXT_KEYS.includes(k) ? 0.035 : 0.01;
+  }
+  tagScore = Math.min((tagScore / Math.max(entries.length + 0.8, 1)) + specificityBonus, 1);
+  const score = Math.min((tagScore * 0.85) + (Math.max(0, semanticScore) * 0.15), 1);
 
-  if (score > 0.9) return { tier: 'Mythical', score };
-  if (score > 0.75) return { tier: 'Legendary', score };
-  if (score > 0.55) return { tier: 'Epic', score };
-  if (score > 0.35) return { tier: 'Rare', score };
+  if (score > 0.92) return { tier: 'Mythical', score };
+  if (score > 0.8) return { tier: 'Legendary', score };
+  if (score > 0.66) return { tier: 'Epic', score };
+  if (score > 0.5) return { tier: 'Rare', score };
+  if (score > 0.3) return { tier: 'Uncommon', score };
   return { tier: 'Common', score };
 }
 
@@ -302,10 +425,15 @@ export async function spawnInArea(lat, lon, opts = {}) {
   const discovered = await sbFetch('concepts', {
     query: 'select=discovered_name&discovered_name=not.is.null&limit=300',
   });
-  const knownNames = discovered.map((d) => d.discovered_name).filter(Boolean);
+  const knownNames = getReusableConceptNames(discovered.map((d) => d.discovered_name).filter(Boolean));
+  const nameFrequencyMap = buildNameFrequencyMap([
+    ...knownNames,
+    ...current.map((concept) => concept.discovered_name || concept.seed_word).filter(Boolean),
+  ]);
 
   let spawned = 0;
   let cycles = 0;
+  const reservedNames = new Set(current.map((concept) => concept.discovered_name || concept.seed_word).filter(Boolean).map((name) => String(name).toLowerCase()));
 
   while (current.length + spawned < targetCount && cycles < GAME_CONFIG.maxSpawnCyclesPerCheck) {
     cycles += 1;
@@ -321,7 +449,7 @@ export async function spawnInArea(lat, lon, opts = {}) {
       try {
         context = await getContextFromOverpass(nLat, nLon);
       } catch {
-        context = [{ name: '', tags: { highway: 'residential' }, lat: nLat, lon: nLon }];
+        context = [{ name: '', tags: { leisure: 'park', place: 'local' }, lat: nLat, lon: nLon }];
       }
 
       const tokens = buildTokenPool(context);
@@ -331,24 +459,29 @@ export async function spawnInArea(lat, lon, opts = {}) {
         if (ok) validated.push(ok);
         if (validated.length > 24) break;
       }
-      const fallbackWords = ['sanctuary', 'growth', 'oasis', 'ember', 'echo', 'market', 'forge', 'haven'];
+      const fallbackWords = ['play', 'garden', 'harbor', 'grove', 'summit', 'orbit', 'forge', 'meadow', 'gallery', 'canopy'];
       const brandNewPool = validated.length ? [...new Set(validated)] : fallbackWords;
 
-      const reuseChance = randomBetween(0.25, 0.33);
+      const reuseChance = randomBetween(0.04, 0.1);
       let selectedWord;
       let semantic = 0.2;
+      const contextText = buildContextText(context);
       if (knownNames.length && Math.random() < reuseChance) {
-        selectedWord = knownNames[randomInt(0, knownNames.length - 1)].toLowerCase();
-      } else {
-        const contextText = context
-          .flatMap((i) => [i.name, ...Object.entries(i.tags || {}).map(([k, v]) => `${k}:${v}`)])
-          .join(' ');
-        const picked = await bestSemanticWord(contextText, brandNewPool);
+        selectedWord = pickLeastRepeatedName(knownNames, nameFrequencyMap, reservedNames);
+      }
+
+      if (!selectedWord) {
+        const uniqueCandidate = pickLeastRepeatedName(brandNewPool, nameFrequencyMap, reservedNames);
+        const picked = await bestSemanticWord(contextText, uniqueCandidate ? [uniqueCandidate, ...brandNewPool] : brandNewPool);
         selectedWord = picked.word;
         semantic = picked.score;
       }
 
-      const mainCtx = context[0] || { tags: { highway: 'residential' }, name: null };
+      selectedWord = (selectedWord || brandNewPool[0] || 'meadow').toLowerCase();
+      reservedNames.add(selectedWord);
+      nameFrequencyMap.set(selectedWord, (nameFrequencyMap.get(selectedWord) || 0) + 1);
+
+      const mainCtx = pickPrimaryContext(context, nLat, nLon);
       const rarity = rarityFromTags(mainCtx.tags, semantic);
       const spawnRateModifier = Number((0.5 + rarity.score * 1.5).toFixed(3));
 

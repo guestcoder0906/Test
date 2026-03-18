@@ -14,12 +14,13 @@ export default async function handler(req, res) {
     if (!concept.discovered_name) return json(res, 400, { error: 'Concept must be discovered before collection' });
 
     const dist = haversineMeters(playerLat, playerLon, concept.lat, concept.lon);
-    const inCollectionRange = dist <= GAME_CONFIG.collectionMeters;
     const adminAllowed = Boolean(adminMode) && isAdminPasswordValid(adminPassword);
+    const collectionMeters = adminAllowed ? Math.max(GAME_CONFIG.collectionMeters, 1000) : GAME_CONFIG.collectionMeters;
+    const inCollectionRange = dist <= collectionMeters;
 
-    if (!(inCollectionRange || adminAllowed)) {
+    if (!inCollectionRange) {
       return json(res, 403, {
-        error: `Player must be within ${GAME_CONFIG.collectionMeters}m (or use admin mode)`,
+        error: `Player must be within ${collectionMeters}m${adminAllowed ? ' while admin mode is active' : ''}`,
         distance: dist,
       });
     }
